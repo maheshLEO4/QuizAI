@@ -6,10 +6,14 @@ from typing import List, Dict, Optional
 import pandas as pd
 import base64
 from datetime import datetime
-from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 class GroqMCQGenerator:
     def __init__(self, api_key: str = None):
