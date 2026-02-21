@@ -1,430 +1,475 @@
 # llm_config.py
 import os
 import json
-from typing import List, Dict, Optional, Any
+import requests
+from typing import List, Dict, Optional
 from dataclasses import dataclass
-from google import genai
-from google.genai import types
 
 
 @dataclass
-class GeminiModel:
-    """Data class for Gemini model configuration"""
+class ModelConfig:
+    """Data class for model configuration"""
     id: str
     name: str
     description: str
+    provider: str  # 'gemini' or 'groq'
     max_tokens: int = 4000
     temperature: float = 0.7
 
 
-class GeminiClient:
-    """Gemini API client for MCQ generation using google.genai SDK"""
-    
-    # Available free models on Gemini
-    AVAILABLE_MODELS = {
-        "gemini-2.5-flash": GeminiModel(
-            id="gemini-2.5-flash",
-            name="Gemini 2.5 Flash",
-            description="Fast, efficient, good for most tasks"
-        ),
-        "gemini-2.5-flash-lite": GeminiModel(
-            id="gemini-2.5-flash-lite",
-            name="Gemini 2.5 Flash Lite",
-            description="Lightning fast, lower cost"
-        ),
-        "gemini-2.0-flash": GeminiModel(
-            id="gemini-2.0-flash",
-            name="Gemini 2.0 Flash",
-            description="Balanced performance"
-        ),
-        "gemini-2.0-flash-lite": GeminiModel(
-            id="gemini-2.0-flash-lite",
-            name="Gemini 2.0 Flash Lite",
-            description="Very fast, efficient"
-        ),
-        "gemma-3-27b-it": GeminiModel(
-            id="gemma-3-27b-it",
-            name="Gemma 3 27B",
-            description="Open model, good for technical content"
-        ),
-        "gemma-3-12b-it": GeminiModel(
-            id="gemma-3-12b-it",
-            name="Gemma 3 12B",
-            description="Smaller, faster open model"
-        )
-    }
-    
-    def __init__(self, api_key: str = None, model_id: str = "gemini-2.5-flash"):
-        """
-        Initialize Gemini client
-        
-        Args:
-            api_key: Google AI Studio API key (optional, will check env var)
-            model_id: Model ID to use
-        """
-        # Try to get API key from parameter, then environment variable
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        
-        if not self.api_key:
-            raise ValueError(
-                "GOOGLE_API_KEY environment variable is not set.\n\n"
-                "Please create a `.env` file in the same directory with this content:\n"
-                "GOOGLE_API_KEY=your_google_api_key_here\n\n"
-                "Get your API key from: https://aistudio.google.com/app/apikey"
-            )
-        
-        # Initialize Gemini client
-        try:
-            self.client = genai.Client(api_key=self.api_key)
-        except Exception as e:
-            raise Exception(f"Failed to initialize Gemini client: {str(e)}")
-        
-        # Set model
-        self.set_model(model_id)
-    
-    def set_model(self, model_id: str):
-        """Set the model to use"""
-        if model_id not in self.AVAILABLE_MODELS:
-            model_id = "gemini-2.5-flash"  # Default fallback
-        
-        self.model = self.AVAILABLE_MODELS[model_id]
-        self.model_id = model_id
-    
-    def get_model_info(self) -> Dict:
-        """Get current model information"""
-        return {
-            "id": self.model_id,
-            "name": self.model.name,
-            "description": self.model.description
-        }
-    
-    def get_available_models(self) -> List[Dict[str, str]]:
-        """Get list of available models for display"""
-        return [
-            {
-                "id": model_id,
-                "name": model.name,
-                "description": model.description
-            }
-            for model_id, model in self.AVAILABLE_MODELS.items()
-        ]
-    
-    def generate_mcqs(self, 
-                     topic: str, 
-                     num_questions: int = 5, 
-                     difficulty: str = "medium",
-                     num_choices: int = 4) -> List[Dict]:
-        """
-        Generate MCQs based on a given topic using Gemini
-        
-        Args:
-            topic: Topic to generate questions about
-            num_questions: Number of questions to generate
-            difficulty: Difficulty level (easy, medium, hard)
-            num_choices: Number of options per question
-            
-        Returns:
-            List of MCQ dictionaries
-        """
-        prompt = self._create_prompt(topic, num_questions, difficulty, num_choices)
-        
-        try:
-            response = self._call_api(prompt)
-            mcqs = self._parse_response(response)
-            
-            # Validate and clean the MCQs
-            validated_mcqs = []
-            for mcq in mcqs[:num_questions]:
-                validated_mcq = self._validate_mcq(mcq, num_choices)
-                if validated_mcq:
-                    validated_mcqs.append(validated_mcq)
-            
-            return validated_mcqs
-            
-        except Exception as e:
-            raise Exception(f"Error generating MCQs: {str(e)}")
-    
-    def _create_prompt(self, topic: str, num_questions: int, difficulty: str, num_choices: int) -> str:
-        """Create the prompt for MCQ generation"""
-        letters = ['A', 'B', 'C', 'D', 'E'][:num_choices]
-        letters_str = ', '.join(letters)
-        
-        return f"""Generate exactly {num_questions} multiple-choice questions on the topic: "{topic}".
+# ─── Available Models ────────────────────────────────────────────────────────
+
+GEMINI_MODELS = {
+    "gemini-2.5-flash": ModelConfig(
+        id="gemini-2.5-flash",
+        name="Gemini 2.5 Flash",
+        description="Fast, efficient – recommended",
+        provider="gemini",
+    ),
+    "gemini-2.5-flash-lite": ModelConfig(
+        id="gemini-2.5-flash-lite",
+        name="Gemini 2.5 Flash Lite",
+        description="Lightning fast, lower cost",
+        provider="gemini",
+    ),
+    "gemini-2.0-flash": ModelConfig(
+        id="gemini-2.0-flash",
+        name="Gemini 2.0 Flash",
+        description="Balanced performance",
+        provider="gemini",
+    ),
+    "gemini-2.0-flash-lite": ModelConfig(
+        id="gemini-2.0-flash-lite",
+        name="Gemini 2.0 Flash Lite",
+        description="Very fast, efficient",
+        provider="gemini",
+    ),
+    "gemma-3-27b-it": ModelConfig(
+        id="gemma-3-27b-it",
+        name="Gemma 3 27B",
+        description="Open model, good for technical content",
+        provider="gemini",
+    ),
+    "gemma-3-12b-it": ModelConfig(
+        id="gemma-3-12b-it",
+        name="Gemma 3 12B",
+        description="Smaller, faster open model",
+        provider="gemini",
+    ),
+}
+
+GROQ_MODELS = {
+    "llama-3.3-70b-versatile": ModelConfig(
+        id="llama-3.3-70b-versatile",
+        name="Llama 3.3 70B",
+        description="Groq – powerful, versatile",
+        provider="groq",
+    ),
+    "llama-3.1-8b-instant": ModelConfig(
+        id="llama-3.1-8b-instant",
+        name="Llama 3.1 8B Instant",
+        description="Groq – ultra-fast, lightweight",
+        provider="groq",
+    ),
+    "mixtral-8x7b-32768": ModelConfig(
+        id="mixtral-8x7b-32768",
+        name="Mixtral 8x7B",
+        description="Groq – strong instruction following",
+        provider="groq",
+    ),
+    "gemma2-9b-it": ModelConfig(
+        id="gemma2-9b-it",
+        name="Gemma 2 9B (Groq)",
+        description="Groq – efficient open model",
+        provider="groq",
+    ),
+}
+
+ALL_MODELS = {**GEMINI_MODELS, **GROQ_MODELS}
+
+
+# ─── Shared MCQ Helpers ───────────────────────────────────────────────────────
+
+def _create_prompt(topic: str, num_questions: int, difficulty: str, num_choices: int) -> str:
+    letters = ["A", "B", "C", "D", "E"][:num_choices]
+    letters_str = ", ".join(letters)
+    options_template = "\n".join(f'        "{l}": "Option {l} text"' for l in letters)
+
+    return f"""Generate exactly {num_questions} multiple-choice questions on the topic: "{topic}".
 
 CRITICAL REQUIREMENTS:
 1. Difficulty level: {difficulty}
 2. Each question must have exactly {num_choices} options ({letters_str})
 3. Include exactly one correct answer per question
-4. Provide a clear, concise, and FACTUALLY ACCURATE explanation for each answer
-5. Output format must be a valid JSON array, nothing else
+4. Provide a clear, concise, FACTUALLY ACCURATE explanation
+5. Output format must be a valid JSON array – nothing else
 6. Questions must be EDUCATIONALLY SOUND and FACTUALLY CORRECT
 
 JSON FORMAT (STRICT):
 [
-{{
+  {{
     "question": "Question text here?",
     "options": {{
-    "A": "Option A text",
-    "B": "Option B text",
-    "C": "Option C text",
-    "D": "Option D text"
+{options_template}
     }},
     "correct_answer": "A",
     "explanation": "Brief explanation why this is correct"
-}}
+  }}
 ]
 
-IMPORTANT GUIDELINES:
-- Questions should test understanding, not just memorization
-- Make incorrect options plausible but clearly wrong
+IMPORTANT:
+- Test understanding, not just memorisation
+- Make distractors plausible but clearly wrong
 - Cover different aspects of the topic
-- Ensure educational value and factual accuracy
-- Return ONLY the JSON array
-"""
-    
-    def _call_api(self, prompt: str) -> str:
-        """Make API call to Gemini using the new SDK"""
-        try:
-            # Create a system message and user message combined
-            full_prompt = f"""You are an expert educational content creator. You ONLY output valid JSON arrays. Never add any text outside the JSON structure.
+- Return ONLY the JSON array – no markdown, no commentary"""
 
-{prompt}"""
-            
-            # Generate response using the new SDK
-            response = self.client.models.generate_content(
-                model=self.model_id,
-                contents=full_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=self.model.temperature,
-                    max_output_tokens=self.model.max_tokens,
-                    safety_settings=[
-                        types.SafetySetting(
-                            category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                            threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                        ),
-                        types.SafetySetting(
-                            category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                            threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                        ),
-                        types.SafetySetting(
-                            category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                            threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                        ),
-                        types.SafetySetting(
-                            category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                            threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                        ),
-                    ]
-                )
-            )
-            
-            # Extract text from response
-            if response.text:
-                return response.text.strip()
-            else:
-                raise Exception("Empty response from Gemini")
-                
-        except Exception as e:
-            if "API key" in str(e).lower():
-                raise Exception("Invalid Google API key. Please check your GOOGLE_API_KEY.")
-            elif "quota" in str(e).lower() or "rate limit" in str(e).lower():
-                raise Exception("Rate limit exceeded. Please try again later.")
-            elif "safety" in str(e).lower():
-                # Handle safety-related errors by retrying with more permissive settings
-                raise Exception("Content blocked by safety filters. Try a different topic.")
-            else:
-                raise Exception(f"Gemini API request failed: {str(e)}")
-    
-    def _parse_response(self, response_text: str) -> List[Dict]:
-        """Parse the API response to extract MCQs"""
+
+def _parse_response(response_text: str) -> List[Dict]:
+    """Parse API response to extract MCQ list."""
+    cleaned = response_text.strip()
+
+    # Strip markdown fences
+    for fence in ("```json", "```"):
+        if cleaned.startswith(fence):
+            cleaned = cleaned[len(fence):]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+
+    # Try to isolate JSON array
+    start = cleaned.find("[")
+    end = cleaned.rfind("]") + 1
+    if start != -1 and end > 0:
         try:
-            # Clean the response text
-            cleaned_text = response_text.strip()
-            
-            # Remove markdown code blocks if present
-            if cleaned_text.startswith("```json"):
-                cleaned_text = cleaned_text[7:]
-            if cleaned_text.startswith("```"):
-                cleaned_text = cleaned_text[3:]
-            if cleaned_text.endswith("```"):
-                cleaned_text = cleaned_text[:-3]
-            cleaned_text = cleaned_text.strip()
-            
-            # Try to find JSON in the response
-            start_idx = cleaned_text.find('[')
-            end_idx = cleaned_text.rfind(']') + 1
-            
-            if start_idx != -1 and end_idx != 0:
-                json_str = cleaned_text[start_idx:end_idx]
-                parsed = json.loads(json_str)
-                if isinstance(parsed, list):
-                    return parsed
-            
-            # Try direct JSON parsing
-            parsed = json.loads(cleaned_text)
+            parsed = json.loads(cleaned[start:end])
             if isinstance(parsed, list):
                 return parsed
-            elif isinstance(parsed, dict):
-                for key in ['questions', 'mcqs', 'data']:
-                    if key in parsed and isinstance(parsed[key], list):
-                        return parsed[key]
-            
         except json.JSONDecodeError:
             pass
-        
-        # Fallback to text extraction
-        return self._extract_mcqs_from_text(response_text)
-    
-    def _extract_mcqs_from_text(self, text: str) -> List[Dict]:
-        """Extract MCQs from text when JSON parsing fails"""
-        mcqs = []
-        lines = text.split('\n')
-        
-        current_mcq = {}
-        current_options = {}
-        collecting_options = False
-        
-        for line in lines:
-            line = line.strip()
-            
-            if not line:
-                continue
-            
-            if line.endswith('?') and len(line) > 10:
-                if current_mcq and current_options:
-                    mcqs.append(current_mcq)
-                
-                current_mcq = {
-                    "question": line,
-                    "options": {},
-                    "correct_answer": "",
-                    "explanation": ""
-                }
-                current_options = {}
-                collecting_options = True
-            
-            elif collecting_options and len(line) > 2:
-                first_char = line[0].upper()
-                if first_char in ['A', 'B', 'C', 'D', 'E'] and line[1] in ['.', ':', ')']:
-                    option_key = first_char
-                    option_text = line[2:].strip()
-                    current_options[option_key] = option_text
-            
-            elif 'correct' in line.lower() or 'answer:' in line.lower():
-                if current_mcq and current_options:
-                    current_mcq["options"] = current_options
-                    for char in line.upper():
-                        if char in ['A', 'B', 'C', 'D', 'E']:
-                            current_mcq["correct_answer"] = char
-                            break
-                    collecting_options = False
-            
-            elif 'explanation' in line.lower():
-                if current_mcq:
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        current_mcq["explanation"] = parts[1].strip()
-        
-        if current_mcq and current_options:
-            current_mcq["options"] = current_options
-            if current_mcq.get("question") and not current_mcq.get("correct_answer"):
-                current_mcq["correct_answer"] = list(current_options.keys())[0]
-            mcqs.append(current_mcq)
-        
-        return mcqs
-    
-    def _validate_mcq(self, mcq: Dict, num_choices: int) -> Optional[Dict]:
-        """Validate and clean a single MCQ"""
-        if not isinstance(mcq, dict):
-            return None
-        
-        if 'question' not in mcq or not mcq['question']:
-            return None
-        
-        mcq['question'] = mcq['question'].strip()
-        if len(mcq['question']) < 5:
-            return None
-        
-        if 'options' not in mcq or not isinstance(mcq['options'], dict):
-            return None
-        
-        cleaned_options = {}
-        for key, value in mcq['options'].items():
-            if isinstance(key, str) and key.upper() in ['A', 'B', 'C', 'D', 'E']:
-                clean_key = key.upper()
-                if isinstance(value, str) and value.strip():
-                    cleaned_options[clean_key] = value.strip()
-        
-        if len(cleaned_options) < 2:
-            return None
-        
-        mcq['options'] = cleaned_options
-        
-        if 'correct_answer' not in mcq or not mcq['correct_answer']:
-            mcq['correct_answer'] = list(cleaned_options.keys())[0]
-        
-        if mcq['correct_answer'] not in cleaned_options:
-            mcq['correct_answer'] = list(cleaned_options.keys())[0]
-        
-        if 'explanation' not in mcq or not mcq['explanation']:
-            mcq['explanation'] = "No explanation provided."
-        
-        return mcq
+
+    # Direct parse
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            for key in ("questions", "mcqs", "data"):
+                if key in parsed and isinstance(parsed[key], list):
+                    return parsed[key]
+    except json.JSONDecodeError:
+        pass
+
+    return []
 
 
-def create_env_template():
-    """Create .env file template"""
-    env_content = """# Google Gemini API Configuration
-# Get your API key from: https://aistudio.google.com/app/apikey
+def _validate_mcq(mcq: Dict, num_choices: int) -> Optional[Dict]:
+    """Validate and normalise a single MCQ dict."""
+    if not isinstance(mcq, dict):
+        return None
+
+    question = str(mcq.get("question", "")).strip()
+    if len(question) < 5:
+        return None
+
+    options = mcq.get("options")
+    if not isinstance(options, dict):
+        return None
+
+    cleaned_options = {
+        k.upper(): str(v).strip()
+        for k, v in options.items()
+        if k.upper() in "ABCDE" and str(v).strip()
+    }
+    if len(cleaned_options) < 2:
+        return None
+
+    correct = str(mcq.get("correct_answer", "")).strip().upper()
+    if correct not in cleaned_options:
+        correct = list(cleaned_options.keys())[0]
+
+    explanation = str(mcq.get("explanation", "")).strip() or "No explanation provided."
+
+    return {
+        "question": question,
+        "options": cleaned_options,
+        "correct_answer": correct,
+        "explanation": explanation,
+    }
+
+
+# ─── Gemini Client (REST) ─────────────────────────────────────────────────────
+
+class GeminiClient:
+    """Google Gemini API client using plain HTTP requests (no SDK required)."""
+
+    AVAILABLE_MODELS = GEMINI_MODELS
+    BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    def __init__(self, api_key: str = None, model_id: str = "gemini-2.5-flash"):
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "GOOGLE_API_KEY is not set.\n\n"
+                "Add it to your .env file:\n"
+                "  GOOGLE_API_KEY=your_key_here\n\n"
+                "Get a free key at https://aistudio.google.com/app/apikey"
+            )
+        self.set_model(model_id)
+
+    def set_model(self, model_id: str):
+        self.model = self.AVAILABLE_MODELS.get(model_id, self.AVAILABLE_MODELS["gemini-2.5-flash"])
+        self.model_id = self.model.id
+
+    def get_model_info(self) -> Dict:
+        return {"id": self.model_id, "name": self.model.name, "description": self.model.description}
+
+    def get_available_models(self) -> List[Dict]:
+        return [{"id": m.id, "name": m.name, "description": m.description} for m in self.AVAILABLE_MODELS.values()]
+
+    def generate_mcqs(self, topic: str, num_questions: int = 5,
+                      difficulty: str = "medium", num_choices: int = 4) -> List[Dict]:
+        prompt = _create_prompt(topic, num_questions, difficulty, num_choices)
+        system_instruction = (
+            "You are an expert educational content creator. "
+            "You ONLY output valid JSON arrays. Never add any text outside the JSON structure."
+        )
+        url = f"{self.BASE_URL}/{self.model_id}:generateContent?key={self.api_key}"
+        payload = {
+            "system_instruction": {"parts": [{"text": system_instruction}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": self.model.temperature,
+                "maxOutputTokens": self.model.max_tokens,
+            },
+        }
+
+        try:
+            resp = requests.post(url, json=payload, timeout=60)
+        except requests.exceptions.Timeout:
+            raise Exception("Request timed out. Please try again.")
+        except requests.exceptions.ConnectionError:
+            raise Exception("Network error. Check your internet connection.")
+
+        if resp.status_code == 429:
+            raise Exception("Rate limit exceeded. Please wait a moment and try again.")
+        if resp.status_code == 401 or resp.status_code == 403:
+            raise Exception("Invalid or unauthorised Google API key. Check GOOGLE_API_KEY.")
+        if not resp.ok:
+            try:
+                err = resp.json().get("error", {}).get("message", resp.text)
+            except Exception:
+                err = resp.text
+            raise Exception(f"Gemini API error ({resp.status_code}): {err}")
+
+        data = resp.json()
+        try:
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError):
+            raise Exception("Unexpected response structure from Gemini API.")
+
+        mcqs = _parse_response(text)
+        validated = [_validate_mcq(m, num_choices) for m in mcqs[:num_questions]]
+        return [m for m in validated if m]
+
+
+# ─── Groq Client (REST) ───────────────────────────────────────────────────────
+
+class GroqClient:
+    """Groq API client using plain HTTP requests (no SDK required)."""
+
+    AVAILABLE_MODELS = GROQ_MODELS
+    BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+    def __init__(self, api_key: str = None, model_id: str = "llama-3.3-70b-versatile"):
+        self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "GROQ_API_KEY is not set.\n\n"
+                "Add it to your .env file:\n"
+                "  GROQ_API_KEY=your_key_here\n\n"
+                "Get a free key at https://console.groq.com/keys"
+            )
+        self.set_model(model_id)
+
+    def set_model(self, model_id: str):
+        self.model = self.AVAILABLE_MODELS.get(model_id, list(self.AVAILABLE_MODELS.values())[0])
+        self.model_id = self.model.id
+
+    def get_model_info(self) -> Dict:
+        return {"id": self.model_id, "name": self.model.name, "description": self.model.description}
+
+    def get_available_models(self) -> List[Dict]:
+        return [{"id": m.id, "name": m.name, "description": m.description} for m in self.AVAILABLE_MODELS.values()]
+
+    def generate_mcqs(self, topic: str, num_questions: int = 5,
+                      difficulty: str = "medium", num_choices: int = 4) -> List[Dict]:
+        prompt = _create_prompt(topic, num_questions, difficulty, num_choices)
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model_id,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert educational content creator. "
+                        "You ONLY output valid JSON arrays. Never add any text outside the JSON structure."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": self.model.temperature,
+            "max_tokens": self.model.max_tokens,
+        }
+
+        try:
+            resp = requests.post(self.BASE_URL, json=payload, headers=headers, timeout=60)
+        except requests.exceptions.Timeout:
+            raise Exception("Request timed out. Please try again.")
+        except requests.exceptions.ConnectionError:
+            raise Exception("Network error. Check your internet connection.")
+
+        if resp.status_code == 429:
+            raise Exception("Rate limit exceeded. Please wait a moment and try again.")
+        if resp.status_code in (401, 403):
+            raise Exception("Invalid or unauthorised Groq API key. Check GROQ_API_KEY.")
+        if not resp.ok:
+            try:
+                err = resp.json().get("error", {}).get("message", resp.text)
+            except Exception:
+                err = resp.text
+            raise Exception(f"Groq API error ({resp.status_code}): {err}")
+
+        data = resp.json()
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError):
+            raise Exception("Unexpected response structure from Groq API.")
+
+        mcqs = _parse_response(text)
+        validated = [_validate_mcq(m, num_choices) for m in mcqs[:num_questions]]
+        return [m for m in validated if m]
+
+
+# ─── Multi-provider Client ────────────────────────────────────────────────────
+
+class MultiLLMClient:
+    """
+    Unified client that wraps both GeminiClient and GroqClient.
+    Automatically picks the right backend based on the selected model.
+    """
+
+    def __init__(self):
+        self._gemini: Optional[GeminiClient] = None
+        self._groq: Optional[GroqClient] = None
+        self._active_model_id: Optional[str] = None
+        self._errors: Dict[str, str] = {}
+
+        # Try to initialise each provider
+        try:
+            self._gemini = GeminiClient()
+        except ValueError as e:
+            self._errors["gemini"] = str(e)
+
+        try:
+            self._groq = GroqClient()
+        except ValueError as e:
+            self._errors["groq"] = str(e)
+
+        if not self._gemini and not self._groq:
+            raise ValueError(
+                "No API keys found.\n\n"
+                "Please set at least one of:\n"
+                "  GOOGLE_API_KEY  (Gemini models)\n"
+                "  GROQ_API_KEY    (Groq / Llama models)\n\n"
+                "in your .env file."
+            )
+
+        # Pick a sensible default model
+        if self._gemini:
+            self._active_model_id = "gemini-2.5-flash"
+            self._active_client = self._gemini
+        else:
+            self._active_model_id = list(GROQ_MODELS.keys())[0]
+            self._active_client = self._groq
+
+    # ── Public API ─────────────────────────────────────────────────────────
+
+    def set_model(self, model_id: str):
+        model = ALL_MODELS.get(model_id)
+        if model is None:
+            return  # ignore unknown models
+
+        if model.provider == "gemini":
+            if self._gemini is None:
+                raise ValueError("Gemini API key not configured. Set GOOGLE_API_KEY.")
+            self._gemini.set_model(model_id)
+            self._active_client = self._gemini
+        else:
+            if self._groq is None:
+                raise ValueError("Groq API key not configured. Set GROQ_API_KEY.")
+            self._groq.set_model(model_id)
+            self._active_client = self._groq
+
+        self._active_model_id = model_id
+
+    def get_model_info(self) -> Dict:
+        return self._active_client.get_model_info()
+
+    def get_available_models(self) -> List[Dict]:
+        """Return models for providers that have valid API keys."""
+        models = []
+        if self._gemini:
+            models += self._gemini.get_available_models()
+        if self._groq:
+            models += self._groq.get_available_models()
+        return models
+
+    def generate_mcqs(self, topic: str, num_questions: int = 5,
+                      difficulty: str = "medium", num_choices: int = 4) -> List[Dict]:
+        return self._active_client.generate_mcqs(
+            topic=topic,
+            num_questions=num_questions,
+            difficulty=difficulty,
+            num_choices=num_choices,
+        )
+
+    def provider_status(self) -> Dict[str, str]:
+        """Return availability status for each provider."""
+        status = {}
+        status["gemini"] = "✅ Available" if self._gemini else f"❌ {self._errors.get('gemini', 'Not configured')}"
+        status["groq"] = "✅ Available" if self._groq else f"❌ {self._errors.get('groq', 'Not configured')}"
+        return status
+
+
+# ─── .env Template ───────────────────────────────────────────────────────────
+
+def create_env_template() -> str:
+    env_content = """# LLM API Keys
+# Get your Google key at: https://aistudio.google.com/app/apikey
 GOOGLE_API_KEY=your_google_api_key_here
 
-# Available Models:
-# - gemini-2.5-flash (Fast, efficient - recommended)
-# - gemini-2.5-flash-lite (Lightning fast)
-# - gemini-2.0-flash (Balanced performance)
-# - gemini-2.0-flash-lite (Very fast)
-# - gemma-3-27b-it (Open model, good for technical)
-# - gemma-3-12b-it (Smaller open model)
+# Get your Groq key at: https://console.groq.com/keys
+GROQ_API_KEY=your_groq_api_key_here
 """
-    
     with open(".env", "w") as f:
         f.write(env_content)
-    
     return env_content
 
 
-# Simple test function
-def test_gemini_client():
-    """Test the Gemini client with a simple query"""
-    try:
-        client = GeminiClient()
-        print("✅ GeminiClient initialized successfully")
-        
-        # Test model info
-        info = client.get_model_info()
-        print(f"   Current model: {info['name']}")
-        
-        # Test generating a single question
-        mcqs = client.generate_mcqs(
-            topic="Python programming",
-            num_questions=1,
-            difficulty="easy",
-            num_choices=4
-        )
-        
-        if mcqs:
-            print(f"✅ Generated {len(mcqs)} question")
-            print(f"   Question: {mcqs[0]['question'][:50]}...")
-            return True
-        else:
-            print("❌ No questions generated")
-            return False
-            
-    except Exception as e:
-        print(f"❌ Test failed: {e}")
-        return False
-
+# ─── Quick smoke-test ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("🧪 Testing Gemini Client...")
-    test_gemini_client()
+    print("🧪 Testing MultiLLMClient...")
+    try:
+        client = MultiLLMClient()
+        print("Status:", client.provider_status())
+        mcqs = client.generate_mcqs("Python basics", num_questions=1, difficulty="easy")
+        if mcqs:
+            print(f"✅ Generated question: {mcqs[0]['question'][:60]}...")
+        else:
+            print("❌ No questions generated")
+    except Exception as e:
+        print(f"❌ Error: {e}")
