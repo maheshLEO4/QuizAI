@@ -319,15 +319,7 @@ def main():
 
     # ── Initialise multi-provider client ──────────────────────────────────────
     try:
-        if not os.path.exists(".env"):
-            with st.expander("📁 Create .env file"):
-                st.code(
-                    "GOOGLE_API_KEY=your_google_api_key_here\nGROQ_API_KEY=your_groq_api_key_here",
-                    language="bash"
-                )
-                if st.button("Create .env template now"):
-                    create_env_template()
-                    st.success("✅ .env file created – add your keys and restart the app.")
+       
 
         client = MultiLLMClient()
         api_key_available = True
